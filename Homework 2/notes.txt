@@ -1,0 +1,143 @@
+Chapter 2, Problem 45: Modify the MINIX 3 scheduler to keep track of how much CPU time each user process has had recently. When no task or server wants to run, pick the user process that has had the smallest share of the CPU.
+Due 2017-02-23
+
+-CPU ticks are ok, but specify the "why" -> 60 times per second
+-determine what "recent" means (use "top" as a guideline?)
+-use system call?
+-only modify user tasks, not system tasks
+-"pick" -> pick_proc()?
+
+process so far:
+-The first part was figuring out how to track recent CPU time.  The kernel increments p_user_time on every tick (adding in lost ticks as needed) so that seemed like a good place to also increment the recent CPU time.  To facilitate this, a new variable was added to the proc struct, p_recent_time of type clock_t.
+-After that, in order to keep recent CPU time recent, I decided to take inspiration from the virtual paging method of bitshifting, and every time the balance_queues function is run, the recent CPU time gets bitshifted by 1 to the right.
+-
+-about picking the right process to run: user processes can range in priority anywhere from 0 to 14, so the algorithm must take that into account
+-proposition: scan queues for system tasks or server processes and run them, if none of them want to run, pick the user process with the least CPU time
+-priorities: processes with s_flags of only SYS_PROC (kernel processes), then processes with s_flags of SYS_PROC and PREEMPTIBLE (server processes), then processes with s_flags of BILLABLE and PREEMPTIBLE (user processes), then idle.
+-seems there's only a need for 4 queues with this model?  kernel (0), servers (1), user (2), other (3)
+-what about a hybrid method? keep the normal queue method for kernel/server processes, and use lowest cpu method for user processes.
+-refined proposition: scan through queues, if a processes is encountered, check what kind of process it is.  if it is a kernel or server process, set it as the next runable and return.  if it is a user process, check its recent cpu time against a new variable in pick_proc (int lowest_recent_time).  if the recent cpu time of the process is lower than the currently recorded minimum, store the pointer to that process and update lowest_recent_time with the new low.  if no user processes want to run, ensure idle runs.
+--potential code
+/* V1 */
+/* handle all of scheduling queue except for IDLE */
+for (q=0; q < NR_SCHED_QUEUES - 1; q++) {
+	rp = rdy_head[q];
+	while (rp != NIL_PROC) {
+		if (priv(rp)->s_flags == SYS_PROC) {
+			next_ptr = rp;
+			return;
+		}
+		else if (priv(rp)->s_flags == SYS_PROC | PREEMPTIBLE) {
+			next_ptr = rp;
+			return;
+		}
+		else if (priv(rp)->s_flags == BILLABLE | PREEMPTIBLE) {
+			if (rp->p_recent_time < lowest_recent_time) {
+				lowest_recent_time = rp->p_recent_time;
+				lowest_recent_proc = rp;
+			}
+		}
+		
+		rp = rp->p_nextready;
+	}
+}
+
+if (lowest_recent_proc != NIL_PROC) {
+	next_ptr = lowest_recent_proc;
+	bill_ptr = lowest_recent_proc;
+	return;
+}
+
+if ( (rp = rdy_head[IDLE_Q]) != NIL_PROC) {
+	next_ptr = rp;
+	bill_ptr = rp;
+	return;
+}
+panic(...)
+/* END V1 */
+
+/* V2 */
+register struct proc *rp;
+int q;
+register struct proc *lowest_recent_proc = NIL_PROC;
+clock_t lowest_recent_time = LONG_MAX;
+
+/* handle all scheduling queues except for IDLE */
+for (q = 0; q < NR_SCHED_QUEUES - 1; q++) {
+	for (rp = rdy_head[q]; rp != NIL_PROC; rp = rp->p_nextready) {
+		if (priv(rp)->s_flags & SYS_PROC) {
+			next_ptr = rp;
+			return;
+		}
+		if (rp->p_recent_time < lowest_recent_time) {
+			lowest_recent_time = rp->p_recent_time;
+			lowest_recent_proc = rp;
+		}
+	}
+}
+
+/* no kernel tasks or server processes want to run, so run the user task with
+ * the least recent CPU time.
+ */
+if (lowest_recent_proc != NIL_PROC) {
+	next_ptr = lowest_recent_proc;
+	bill_ptr = lowest_recent_proc;
+	return;
+}
+
+/* nothing at all wants to run, so run the idle task. */
+if ( (rp = rdy_head[IDLE_Q]) != NIL_PROC) {
+	next_ptr = rp;
+	bill_ptr = rp;
+	return;
+}
+panic(...)
+/* END V2 */
+
+continued process:
+-code works
+-for testing, used 2 programs, testa and testb.  when both were actively running, they were almost always in step or one tick off from eachother.  when testb went into sleep mode, there is a significan difference that shows up.  because testb only sleeps for 1 second, the differences don't get too pronounced and they quickly even out again.
+NOTE: STILL NEED TO TEST WITH HIGH AND LOW PRIORITY!
+
+
+changes:
+++33 added declaration for p_recent_time [kernel/proc.h]
+++50 added initialization for p_recent_time [kernel/main.c]
+++57 added reinitialization of p_recent_time [kernel/system/do_fork.c]
+++196 added increment for p_recent_time [kernel/clock.c]
+mm467,mm480,mm484,--485-489 adjusted code for proctab_dmp to display recent [servers/is/dmp_kernel.c]
+++669 added commented out decay code for p_recent_time [kernel/proc.c]
+mm669 uncommented decay code for p_recent_time [kernel/proc.c]
+++142 added isuserproc(p) function [kernel/proc.h]
+undo changes to proctab_dmp in preparation for making F12 function. [servers/is/dmp_kernel.c]
+++22 add prototype for recent_dmp [servers/is/proto.h]
+mm15,++32 increase the number of hooks, and add recent_dmp to f-key function list [servers/is/dmp.c]
+++207-259 copied priviledge_dmp to serve as the base of recent_dmp [servers/is/dmp_kernel.c]
+mm207-250 modified recent_dmp [servers/is/dmp_kernel.c]
+mm142 renamed isuserproc to isusrfp [kernel/proc.h]
+mm634-670 rewrote pick_proc() to follow guidelines of assignment [kernel/proc.c]
+mm142 commented out isusrfp() to ensure it can be removed without incident. [kernel/proc.h]
+mm692 reduced line of code by using >>= operator [kernel/proc.c]
+--142 removed isusrfp() [kernel/proc.h]
+
+files changed
+kernel/clock.c
+kernel/main.c
+kernel/proc.c
+kernel/proc.h
+kernel/system/do_fork.c
+servers/is/dmp.c
+servers/is/dmp_kernel.c
+servers/is/proto.h
+
+
+
+dump changes
+++36 add prototype for periodic_proc_dump function [kernel/proto.h]
+++151-152 initialize periodic_proc_dump function timer [kernel/clock.c]
+++694-715 added periodic_proc_dump function [kernel/proc.c]
+
+
+test programs
+-testa: perpetually adds 1+1
+-testb: counts from 1 to 3 million, then sleeps for 1 second

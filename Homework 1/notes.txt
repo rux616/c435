@@ -1,0 +1,36 @@
+todo:
+-figure out testing methodology
+
+helpful website: https://gyires.inf.unideb.hu/GyBITT/22/ch02s03.html
+
+process so far:
+-expanding the proc struct went without issue
+-hijacking f4 key went without issue
+-adding new dmp function prototype and basic testing/stub implementation went without issue -> should we be totally replacing the dmp_privileges function, or is it fine if we simply add on to the end?
+-while doing a test initialization of the p_mess_sent array in kernel/main.c:main(), i used set index 0 of p_mess_sent to the process number just to ensure things were getting initialized properly.  this caused some confusion before I realized that many of the tasks were being forked, copying the proc struct.  this means that in order to accurately record the number of messages sent, p_mess_sent will need to be zeroed out on every fork.
+-implemented zeroing of p_mess_sent on every fork, as well as zeroing out the number of messages previously sent to any process that used the same pid.
+--tested by disabling message tracking in kernel/proc.c:mini_send() and setting the first 5 slots (0-4) of p_mess_sent to the pid in kernel/main.c:main().  any processes started beyond the first 13 are forked, so the expected results is that they would all have '0' in thier p_mess_sent.  results as expected.
+-created logic to display message table (this took much longer than it should have due to having a nasty cold that had made it very hard to think)
+-top and ps break when you mess with proc.h, and don't get recompiled with a kernel recompile, thus they have to be done manually. (cd /usr/src/command; make all install)
+--even after this, PS still refuses to run due to running out of stack space.  ps needs AT LEAST an extra 30k of stack+malloc space, given using "chmem +30000 /usr/bin/ps", to run.  possibly more for different configurations.  ended up adding an extra 50k just for padding.
+-going to intentionally not worry about overflows for the message array based on the fact that the OS doesn't seem to care about overflows in other tracking variables like p_user_time and p_sys_time.
+
+
+testing:
+-how the hell to test? --> done already (incremental)
+
+
+
+changes made:
+-extended proc struct with unsigned long array. (kernel/proc.h)
+-added prototype for message dump function (servers/is/proto.h)
+-hijacked F4 key for message dump function (servers/is/dmp.c)
+-added message dump function stub (servers/is/dmp_kernel.c)
+-added test initialization code for p_mess_sent array (kernel/main.c)
+-fleshed out message dump function to dump test initialization value, index 0, of p_mess_sent array (servers/is/dmp_kernel.c)
+-added memset initialization of p_mess_sent array and removed test initialization (kernel/main.c)
+-moved array declaration of p_mess_sent above debug statement in proc struct (kernel/proc.h)
+-added message sending capture (kernel/proc.c)
+-started expanding messaging_dmp function. (servers/is/dmp_kernel.c)
+-modified do_fork() function to clear p_mess_sent on every fork [58-68?] (kernel/system/do_fork.c)
+-fleshed out messaging_dmp() function and made everything look pretty.
